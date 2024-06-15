@@ -1,3 +1,4 @@
+import datetime
 import os
 import tempfile
 import torch
@@ -9,8 +10,10 @@ import numpy as np
 import math
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
-from tsfm_public.toolkit.time_series_preprocessor import TimeSeriesPreprocessor, get_datasets, ScalerType
+from tsfm_public.toolkit.time_series_preprocessor import TimeSeriesPreprocessor, get_datasets, ScalerType, \
+    StandardScaler
 from tsfm_public.models.tinytimemixer import TinyTimeMixerForPrediction
 from tsfm_public.models.tinytimemixer.utils import plot_preds, count_parameters
 from tsfm_public.toolkit.callbacks import TrackingCallback
@@ -33,12 +36,10 @@ class TimeSeriesModelTrainer:
     def _load_data(self):
         df = pd.read_csv(self.data_file)
         df.index = pd.date_range("2022-06-01 00:00:01", freq="1s", periods=len(df))
-        df = df.rename_axis('Timestamp')
-        df.reset_index(inplace=True)
 
         if df.isnull().values.any():
             print("Dataset contains missing values. Filling missing values using back and forward fill")
-            df = df.ffill().bfill()
+            df = df.ffill()
         return df
 
     def _init_preprocessor(self):
@@ -80,14 +81,14 @@ class TimeSeriesModelTrainer:
                                           fewshot_fraction=1.0)
 
         # Make predictions using the zero-shot model
-        zeroshot_output = zeroshot_trainer.predict(test_dataset)
-        self.predictions_zeroshot = zeroshot_output.predictions
+        #zeroshot_output = zeroshot_trainer.predict(test_dataset)
+        #self.predictions_zeroshot = zeroshot_output.predictions
 
-        print("+" * 20, "Validation MSE zero-shot", "+" * 20)
-        print(zeroshot_output.metrics)
+        #print("+" * 20, "Validation MSE zero-shot", "+" * 20)
+        #print(zeroshot_output.metrics)
 
         plot_preds(trainer=zeroshot_trainer, dset=test_dataset, plot_dir=os.path.join(self.out_dir, "plots"),
-                   plot_prefix="test_zeroshot_pred", channel=-1)
+                   plot_prefix="test_zeroshot_test5", channel=6, num_plots=8)
 
     def fewshot_finetune_eval(self, batch_size, learning_rate=0.001, forecast_length=96,
                               fewshot_percent=5, freeze_backbone=True, num_epochs=10, save_dir=None,
@@ -165,14 +166,15 @@ class TimeSeriesModelTrainer:
         finetune_forecast_trainer.train()
 
         # Make predictions using the fine-tuned model
-        finetune_output = finetune_forecast_trainer.predict(test_dataset)
-        self.predictions_finetune = finetune_output.predictions
+        finetune_output = finetune_forecast_trainer.evaluate(test_dataset)
+        #self.predictions_finetune = finetune_output.predictions
 
         print("+" * 20, f"Test MSE after few-shot {fewshot_percent}% fine-tuning", "+" * 20)
+        print(finetune_output)
         print(finetune_output.metrics)
 
         plot_preds(trainer=finetune_forecast_trainer, dset=test_dataset, plot_dir=os.path.join(self.out_dir, "plots"),
-                   plot_prefix="test_fewshot_pred", channel=-1)
+                   plot_prefix="test_fewshot_better_plot", channel=-1)
 
     def _split_config(self):
         return {
@@ -182,13 +184,84 @@ class TimeSeriesModelTrainer:
         }
 
 
+def data_preproccesing(data):
+    df = pd.read_csv(data)
+    df.index = pd.date_range("2022-06-01 00:00:01", freq="1s", periods=len(df))
+    df = df.rename_axis('Timestamp')
+    df.reset_index(inplace=True)
+    return df
+
+
+def inference(dataframe, context_length, prediction_length, start):
+    # Ensure the 'Timestamp' column is in datetime format
+    if not np.issubdtype(dataframe['Timestamp'].dtype, np.datetime64):
+        dataframe['Timestamp'] = pd.to_datetime(dataframe['Timestamp'])
+
+    # Extracting the past and future dataframes based on context and prediction lengths
+    dataframe_past = dataframe.iloc[start:start + context_length]
+    dataframe_future = dataframe.iloc[start + context_length:start + context_length + prediction_length]
+
+    # Displaying the first few rows of the past and future dataframes
+    print("Past Dataframe:")
+    print(dataframe_past.head())
+    print("Future Dataframe:")
+    print(dataframe_future.head())
+
+    # Printing the lengths of the past and future dataframes
+    print("Past dataframe length: ", len(dataframe_past))
+    print("Future dataframe length: ", len(dataframe_future))
+
+    # Combining the past and future dataframes for plotting
+    dataframe_combined = pd.concat([dataframe_past, dataframe_future], axis=0)
+    print("Combined Dataframe Columns:", dataframe_combined.columns)
+
+    print("Number of rows: ", dataframe.info())
+
+    # Plotting each column in the dataframe
+    for column in dataframe_combined.columns:
+        if column == 'Timestamp':
+            continue
+        else:
+            scaler = StandardScaler()
+            scaled_column = scaler.fit_transform(dataframe_combined[[column]])
+            plt.figure(figsize=(20, 6))
+
+            # Adjusting timestamp for the vertical line
+            last_timestamp = dataframe_combined['Timestamp'].iloc[-1]
+            adjusted_timestamp = last_timestamp - datetime.timedelta(seconds=96)
+
+            # Plotting the vertical line
+            plt.axvline(x=adjusted_timestamp, color='red', label='Prediction Start')
+
+            # Plotting the column values over time
+            plt.plot(dataframe_combined['Timestamp'], scaled_column)
+
+            plt.title(f'Time Series Plot for {column}')
+            plt.xlabel('Timestamp')
+            plt.ylabel(column)
+            plt.legend()
+
+            # Formatting the x-axis for better tick visibility
+            ax = plt.gca()
+            locator = mdates.SecondLocator(interval=30)  # Adjust the interval as needed
+            formatter = mdates.DateFormatter('%Y-%m-%d %H:%M:%S')
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(formatter)
+            plt.xticks(rotation=45)
+
+            plt.tight_layout()
+
+    plt.show()
+
+
 if __name__ == "__main__":
-    trainer = TimeSeriesModelTrainer(data_file='vsv_dataset_column.csv', out_dir="ttm_finetuned_models/", model_revision="main")
+    trainer = TimeSeriesModelTrainer(data_file='vdg_dataset_column.csv', out_dir="ttm_finetuned_models/", model_revision="main")
     # Perform zero-shot evaluation
-    trainer.zeroshot_eval(batch_size=64)
+    #trainer.zeroshot_eval(batch_size=64)
     # Perform few-shot fine-tuning and evaluation
     #trainer.fewshot_finetune_eval(batch_size=64)
-
-    print(trainer.predictions_zeroshot)
+    #print(trainer.predictions_zeroshot)
     #print(trainer.predictions_finetune)
+    df = data_preproccesing('vdg_dataset_column.csv')
+    inference(df, 512, 96, 1026175)
 
