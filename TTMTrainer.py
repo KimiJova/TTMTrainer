@@ -36,6 +36,7 @@ class TimeSeriesModelTrainer:
     def _load_data(self):
         df = pd.read_csv(self.data_file)
         df.index = pd.date_range("2022-06-01 00:00:01", freq="1s", periods=len(df))
+        df = df.rename_axis('Timestamp').reset_index()
 
         if df.isnull().values.any():
             print("Dataset contains missing values. Filling missing values using back and forward fill")
@@ -58,7 +59,7 @@ class TimeSeriesModelTrainer:
             **column_specifiers,
             context_length=512,
             prediction_length=96,
-            scaling=True,
+            scaling=False,
             encode_categorical=False,
             scaler_type=ScalerType.STANDARD.value
         )
@@ -87,8 +88,11 @@ class TimeSeriesModelTrainer:
         #print("+" * 20, "Validation MSE zero-shot", "+" * 20)
         #print(zeroshot_output.metrics)
 
-        plot_preds(trainer=zeroshot_trainer, dset=test_dataset, plot_dir=os.path.join(self.out_dir, "plots"),
-                   plot_prefix="test_zeroshot_test5", channel=6, num_plots=8)
+        column_names = self.df.columns.tolist()
+
+        for i in range(0,8):
+            plot_preds(trainer=zeroshot_trainer, dset=test_dataset, plot_dir=os.path.join(self.out_dir, "plots"),
+                       plot_prefix="test_zeroshot_test2", channel=i, num_plots=10, column_names=column_names)
 
     def fewshot_finetune_eval(self, batch_size, learning_rate=0.001, forecast_length=96,
                               fewshot_percent=5, freeze_backbone=True, num_epochs=10, save_dir=None,
@@ -166,15 +170,19 @@ class TimeSeriesModelTrainer:
         finetune_forecast_trainer.train()
 
         # Make predictions using the fine-tuned model
-        finetune_output = finetune_forecast_trainer.evaluate(test_dataset)
+        #finetune_output = finetune_forecast_trainer.evaluate(test_dataset)
         #self.predictions_finetune = finetune_output.predictions
 
         print("+" * 20, f"Test MSE after few-shot {fewshot_percent}% fine-tuning", "+" * 20)
-        print(finetune_output)
-        print(finetune_output.metrics)
+        #print(finetune_output)
+        #print(finetune_output.metrics)
 
-        plot_preds(trainer=finetune_forecast_trainer, dset=test_dataset, plot_dir=os.path.join(self.out_dir, "plots"),
-                   plot_prefix="test_fewshot_better_plot", channel=-1)
+        column_names = self.df.columns.tolist()
+
+        for i in range(-1,8):
+            plot_preds(trainer=finetune_forecast_trainer, dset=test_dataset,
+                       plot_dir=os.path.join(self.out_dir, "plots"),
+                       plot_prefix="test_fewshot_better_plot", channel=i, column_names=column_names)
 
     def _split_config(self):
         return {
@@ -257,11 +265,13 @@ def inference(dataframe, context_length, prediction_length, start):
 if __name__ == "__main__":
     trainer = TimeSeriesModelTrainer(data_file='vdg_dataset_column.csv', out_dir="ttm_finetuned_models/", model_revision="main")
     # Perform zero-shot evaluation
-    #trainer.zeroshot_eval(batch_size=64)
+    trainer.zeroshot_eval(batch_size=64)
+
     # Perform few-shot fine-tuning and evaluation
     #trainer.fewshot_finetune_eval(batch_size=64)
+
     #print(trainer.predictions_zeroshot)
     #print(trainer.predictions_finetune)
-    df = data_preproccesing('vdg_dataset_column.csv')
-    inference(df, 512, 96, 1026175)
+    #df = data_preproccesing('vdg_dataset_column.csv')
+    #inference(df, 512, 96, 1026175)
 
